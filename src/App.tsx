@@ -56,6 +56,7 @@ import {
   isSupportedDate,
   hasEstimatedWorkdays,
 } from "./lib/calendar";
+import { MODE_LABEL, calendarSpan, isOverdue, modeLabel, projectEnd } from "./lib/project";
 import OfficialNavIcon from "./components/OfficialNavIcon";
 import Calendar from "./components/Calendar";
 import Progress from "./components/Progress";
@@ -70,7 +71,7 @@ const NAV = [
 ];
 const TABS = [
   ["day", "当日任务"],
-  ["requirements", "客户需求"],
+  ["requirements", "目标"],
   ["tasks", "任务管理"],
   ["milestones", "里程碑管理"],
   ["background", "项目背景"],
@@ -170,12 +171,12 @@ export default function App() {
         <button
           className="wordmark"
           onClick={() => go("projects")}
-          aria-label="EOPS 终末地工业项目中枢首页"
+          aria-label="EOPS 终末地工业行动中枢首页"
         >
           <img
             className="endfield-logo"
             src={`/assets/eops-logo-${state.settings.theme === "dark" ? "white" : "black"}.svg`}
-            alt="EOPS 终末地工业项目中枢"
+            alt="EOPS 终末地工业行动中枢"
             width="46"
             height="51"
           />
@@ -253,7 +254,7 @@ export default function App() {
       <div className="app-body">
         <header className="topbar">
           <div className="breadcrumb">
-            <span className="breadcrumb-root" title="EOPS 终末地工业项目中枢">EOPS</span>
+            <span className="breadcrumb-root" title="EOPS 终末地工业行动中枢">EOPS</span>
             <ChevronRight size={13} />
             <strong>{navTitle}</strong>
             {project && (section === "workspace" || section === "status") && (
@@ -340,7 +341,7 @@ export default function App() {
                   <aside className="workspace-overview">
                     <Progress project={project} compact />
                     <Calendar
-                      projects={[project]}
+                      projects={calendarSpan([project], state)}
                       tasks={scopeTasks}
                       milestones={scopeMilestones}
                       selectedDate={selectedDate}
@@ -449,7 +450,7 @@ function EmptyWorkspace({ onPick }: { onPick: () => void }) {
       </div>
       <h1>当前没有选定项目</h1>
       <p>
-        选择项目后，可查看需求、任务和日程。 ( ˶˙ᵕ˙˶ )
+        选择项目后，可查看目标、任务和日程。 ( ˶˙ᵕ˙˶ )
       </p>
       <button className="btn primary" onClick={onPick}>
         前往项目列表
@@ -538,6 +539,7 @@ function ProjectEditor({
   const [title, setTitle] = useState(project?.title || "");
   const [start, setStart] = useState(project?.startDate || today());
   const [end, setEnd] = useState(project?.endDate || addDays(today(), 28));
+  const [deadline, setDeadline] = useState(project?.deadline ?? true);
   const [description, setDescription] = useState(project?.description || "");
   const [members, setMembers] = useState(
     (project?.members || [state.settings.selfName]).join("、"),
@@ -562,7 +564,12 @@ function ProjectEditor({
           }
           const fields = new FormData(e.currentTarget);
           const formStart = String(fields.get("startDate") || start);
-          const formEnd = String(fields.get("endDate") || end);
+          // Open-ended projects keep a placeholder end date that nothing reads.
+          const formEnd = deadline
+            ? String(fields.get("endDate") || end)
+            : end >= formStart
+              ? end
+              : formStart;
           if (formEnd < formStart) {
             setError("截止日期应晚于或等于起始日期");
             return;
@@ -573,6 +580,7 @@ function ProjectEditor({
               title: title.trim(),
               startDate: formStart,
               endDate: formEnd,
+              deadline,
               description,
               members: [
                 ...new Set([
@@ -614,9 +622,29 @@ function ProjectEditor({
             onChange={(e) => setTitle(e.target.value)}
           />
         </label>
+        <div className="mode-picker" role="radiogroup" aria-label="项目类型">
+          {(
+            [
+              [true, MODE_LABEL.deadline, "有明确截止日期，按剩余工作日推进"],
+              [false, MODE_LABEL.open, "没有明确截止日期，按任务完成情况推进"],
+            ] as const
+          ).map(([value, label, hint]) => (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={deadline === value}
+              key={label}
+              className={deadline === value ? "active" : ""}
+              onClick={() => setDeadline(value)}
+            >
+              <strong>{label}</strong>
+              <small>{hint}</small>
+            </button>
+          ))}
+        </div>
         <div className="form-row">
           <label>
-            参考起始日期
+            {deadline ? "参考起始日期" : "开始日期"}
             <input
               required
               type="date"
@@ -628,23 +656,27 @@ function ProjectEditor({
               onChange={(e) => setStart(e.target.value)}
             />
           </label>
-          <label>
-            参考截止日期
-            <input
-              required
-              type="date"
-              name="endDate"
-              min={start || "1900-01-01"}
-              max="2099-12-31"
-              value={end}
-              onInput={(e) => setEnd(e.currentTarget.value)}
-              onChange={(e) => setEnd(e.target.value)}
-            />
-          </label>
+          {deadline && (
+            <label>
+              参考截止日期
+              <input
+                required
+                type="date"
+                name="endDate"
+                min={start || "1900-01-01"}
+                max="2099-12-31"
+                value={end}
+                onInput={(e) => setEnd(e.currentTarget.value)}
+                onChange={(e) => setEnd(e.target.value)}
+              />
+            </label>
+          )}
         </div>
         <p className="field-hint">
-          日期用于初始规划，后续可自由调整。
-          {isSupportedDate(start) && isSupportedDate(end) && end >= start
+          {deadline
+            ? "日期用于初始规划，后续可自由调整。"
+            : "无截止日期的项目默认不显示在全局日历上，可在日历页打开。"}
+          {deadline && isSupportedDate(start) && isSupportedDate(end) && end >= start
             ? `${hasEstimatedWorkdays(start, end, state.settings.calendarOverrides) ? "预计" : ""}共 ${workdays(start, end, state.settings.calendarOverrides)} 个工作日。`
             : ""}
         </p>
@@ -735,9 +767,7 @@ function Projects({
           (b.status === "completed" ? 1 : 0) || a.order - b.order,
     );
   const active = state.projects.filter((p) => p.status === "active").length;
-  const due = state.projects.filter(
-    (p) => p.status === "active" && p.endDate < today(),
-  ).length;
+  const due = state.projects.filter((p) => isOverdue(p)).length;
   function toggle(id: string) {
     setSelected((prev) =>
       prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id],
@@ -857,7 +887,7 @@ function Projects({
             onClick={() =>
               ask(
                 "归档所选项目",
-                `归档后仍保留所有需求、任务与历史，可以随时恢复。`,
+                `归档后仍保留所有目标、任务与历史，可以随时恢复。`,
                 async () => {
                   for (const id of selected)
                     await act("project.update", { id, status: "archived" });
@@ -874,7 +904,7 @@ function Projects({
             onClick={() =>
               ask(
                 "删除所选项目",
-                `将删除 ${selected.length} 个项目及其所有任务、需求和里程碑。此操作请先确认备份。`,
+                `将删除 ${selected.length} 个项目及其所有任务、目标和里程碑。此操作请先确认备份。`,
                 async () => {
                   for (const id of selected)
                     await act("project.delete", { id });
@@ -990,7 +1020,12 @@ function Projects({
                   <CalendarDays size={13} />
                   {formatDate(p.startDate, state.settings.dateFormat)}{" "}
                   <span>—</span>{" "}
-                  {formatDate(p.endDate, state.settings.dateFormat)}
+                  {p.deadline
+                    ? formatDate(p.endDate, state.settings.dateFormat)
+                    : "无明确 DDL"}
+                  <span className={`mode-tag ${p.deadline ? "" : "open"}`}>
+                    {modeLabel(p)}
+                  </span>
                 </div>
                 <div className="project-progress-label">
                   <span>
@@ -1009,13 +1044,13 @@ function Projects({
                 </div>
                 <div className="project-card-footer">
                   <span
-                    className={`badge ${p.endDate < today() && p.status === "active" ? "warning" : ""}`}
+                    className={`badge ${isOverdue(p) ? "warning" : ""}`}
                   >
                     {p.status === "completed"
                       ? "已完成"
                       : p.status === "archived"
                         ? "已归档"
-                        : p.endDate < today()
+                        : isOverdue(p)
                           ? "已逾期"
                           : p.startDate > today()
                             ? "待开始"
@@ -1208,8 +1243,15 @@ function GlobalCalendar({
   onDate: (d: string) => void;
   onProject: (p: Project, d?: string) => void;
 }) {
-  const { state } = useApp();
-  const projects = state.projects.filter((p) => p.status !== "archived");
+  const { state, act } = useApp();
+  const visible = state.projects.filter((p) => p.status !== "archived");
+  const showOpen = state.settings.calendarShowOpen;
+  const openCount = visible.filter((p) => !p.deadline).length;
+  // Open-ended projects stay off the calendar unless the user asks for them.
+  const projects = calendarSpan(
+    visible.filter((p) => p.deadline || showOpen),
+    state,
+  );
   const rows = state.tasks
     .filter(
       (t) =>
@@ -1225,6 +1267,19 @@ function GlobalCalendar({
           <h1>日历</h1>
           <p>点击日期查看当天的项目和任务。</p>
         </div>
+        {openCount > 0 && (
+          <button
+            className={`btn toggle-open ${showOpen ? "active" : ""}`}
+            aria-pressed={showOpen}
+            onClick={() =>
+              act("settings.update", { calendarShowOpen: !showOpen }).catch(
+                () => {},
+              )
+            }
+          >
+            {showOpen ? "隐藏" : "显示"}无 DDL 项目 · {openCount}
+          </button>
+        )}
         <span className="outline-label">
           {projects.length} 个项目 /{" "}
           {projects.reduce(
@@ -1324,9 +1379,10 @@ function Status({
   const milestones = state.milestones
     .filter((m) => m.projectId === project.id)
     .sort((a, b) => a.date.localeCompare(b.date));
+  const end = projectEnd(project, state);
   const periods = periodBreakdown(
     project.startDate,
-    project.endDate,
+    end,
     state.settings.calendarOverrides,
   );
   const [period, setPeriod] = useState<"week" | "month">("week");
@@ -1367,12 +1423,12 @@ function Status({
           caption="已达成 / 全部"
         />
         <Metric
-          label="客户需求"
+          label="目标"
           value={
             state.requirements.filter((r) => r.projectId === project.id).length
           }
           unit="条"
-          caption={`${state.batches.filter((b) => b.projectId === project.id).length} 次需求记录`}
+          caption={`${state.batches.filter((b) => b.projectId === project.id).length} 批目标`}
         />
       </div>
       <div className="status-grid">
@@ -1456,7 +1512,7 @@ function Status({
             每周、每月按实际日期统计，不作固定天数折算。
             {hasEstimatedWorkdays(
               project.startDate,
-              project.endDate,
+              end,
               state.settings.calendarOverrides,
             ) && (
               <span> 部分日期超过已公布的 2026 年日历，按周一至周五预计。</span>
@@ -1529,9 +1585,9 @@ function Workload({
     .filter(
       (p) =>
         p.status === "active" &&
-        ((p.startDate <= now && p.endDate >= now) ||
+        ((p.startDate <= now && (!p.deadline || p.endDate >= now)) ||
           state.tasks.some((t) => t.projectId === p.id && t.date === now) ||
-          p.endDate < now),
+          isOverdue(p, now)),
     )
     .sort((a, b) => a.order - b.order);
   const tasks = state.tasks.filter(
@@ -1589,12 +1645,20 @@ function Workload({
           const ptasks = tasks
             .filter((t) => t.projectId === p.id)
             .sort((a, b) => a.order - b.order);
-          const pct = projectTimeProgress(
-            p.startDate,
-            p.endDate,
-            now,
-            state.settings.calendarOverrides,
-          );
+          const own = state.tasks.filter((t) => t.projectId === p.id);
+          // Open-ended projects have no time axis; show task completion instead.
+          const pct = p.deadline
+            ? projectTimeProgress(
+                p.startDate,
+                p.endDate,
+                now,
+                state.settings.calendarOverrides,
+              )
+            : own.length
+              ? Math.round(
+                  (own.filter((t) => t.done).length / own.length) * 100,
+                )
+              : 0;
           return (
             <section
               className="surface-card workload-card"
@@ -1611,17 +1675,23 @@ function Workload({
                 <div>
                   <h2>{p.title}</h2>
                   <span>
-                    {hasEstimatedWorkdays(
-                      p.startDate,
-                      p.endDate,
-                      state.settings.calendarOverrides,
-                    )
-                      ? "预计时间进度"
-                      : "时间进度"}{" "}
-                    {Math.round(pct)}% ·{" "}
-                    {p.endDate < now
-                      ? "已逾期"
-                      : `剩余 ${remainingWorkdays(p.endDate, now, state.settings.calendarOverrides, p.startDate)} 工作日`}
+                    {p.deadline ? (
+                      <>
+                        {hasEstimatedWorkdays(
+                          p.startDate,
+                          p.endDate,
+                          state.settings.calendarOverrides,
+                        )
+                          ? "预计时间进度"
+                          : "时间进度"}{" "}
+                        {Math.round(pct)}% ·{" "}
+                        {p.endDate < now
+                          ? "已逾期"
+                          : `剩余 ${remainingWorkdays(p.endDate, now, state.settings.calendarOverrides, p.startDate)} 工作日`}
+                      </>
+                    ) : (
+                      `${MODE_LABEL.open} · 任务完成 ${own.filter((t) => t.done).length}/${own.length}`
+                    )}
                   </span>
                 </div>
                 <ArrowUpRight size={20} />
@@ -1953,7 +2023,7 @@ function Config({
             />
           </div>
           <p className="field-hint">
-            恢复包含项目、需求、任务、里程碑与全局设置。
+            恢复包含项目、目标、任务、里程碑与全局设置。
           </p>
         </section>
         <section className="surface-card settings-card">

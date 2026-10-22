@@ -20,18 +20,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 from zoneinfo import ZoneInfo
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 ROOT = Path(__file__).resolve().parents[1]
 COLLECTIONS = {"project": "projects", "task": "tasks", "requirement": "requirements", "batch": "batches", "milestone": "milestones"}
 COMMON = {"title", "description"}
 FIELDS = {
-    "project": COMMON | {"startDate", "endDate", "members", "color", "status"},
+    "project": COMMON | {"startDate", "endDate", "deadline", "members", "color", "status"},
     "task": COMMON | {"projectId", "requirementId", "date", "difficulty", "done", "workers", "subtasks", "dependencies"},
     "requirement": COMMON | {"projectId", "batchId", "kind", "done", "difficulty", "subtasks"},
     "batch": {"projectId", "date"},
     "milestone": COMMON | {"projectId", "date", "done"},
 }
-SETTINGS = {"theme": "light", "fontSize": 14, "dateFormat": "YYYY.MM.DD", "sidebarPinned": False, "calendarHeatmap": "rate", "selfName": "自己", "calendarOverrides": {}, "reducedMotion": False}
+SETTINGS = {"theme": "light", "fontSize": 14, "dateFormat": "YYYY.MM.DD", "sidebarPinned": False, "calendarHeatmap": "rate", "selfName": "自己", "calendarOverrides": {}, "reducedMotion": False, "calendarShowOpen": False}
 MAX_BODY = 8 * 1024 * 1024
 
 
@@ -117,6 +117,7 @@ def validate_settings(settings):
     require(settings["calendarHeatmap"] in ("off", "rate", "count"), "日历热力模式无效")
     boolean(settings["sidebarPinned"], "固定侧栏")
     boolean(settings["reducedMotion"], "减少动态效果")
+    boolean(settings["calendarShowOpen"], "日历显示无 DDL 项目")
     text_value(settings["selfName"], "自己的姓名", True, 128)
     overrides = obj(settings["calendarOverrides"], "工作日调整")
     require(len(overrides) <= 10000, "工作日调整数量过多")
@@ -128,14 +129,32 @@ def validate_settings(settings):
         text_value(setting["note"], "工作日备注", maximum=1000)
 
 
+SCHEMA_VERSION = 2
+
+
 def empty_state():
-    return {"schemaVersion": 1, "revision": 0, **{name: [] for name in COLLECTIONS.values()}, "settings": copy.deepcopy(SETTINGS)}
+    return {"schemaVersion": SCHEMA_VERSION, "revision": 0, **{name: [] for name in COLLECTIONS.values()}, "settings": copy.deepcopy(SETTINGS)}
+
+
+def upgrade_state(state):
+    """Bring version 1 data (EOPS 0.1.x) up to the current schema; other input is returned untouched."""
+    if type(state) is not dict or state.get("schemaVersion") != 1:
+        return state
+    state = copy.deepcopy(state)
+    # 0.1.x projects all had fixed end dates; open-ended projects arrived in schema 2.
+    for project in state.get("projects") if type(state.get("projects")) is list else []:
+        if type(project) is dict:
+            project.setdefault("deadline", True)
+    if type(state.get("settings")) is dict:
+        state["settings"].setdefault("calendarShowOpen", False)
+    state["schemaVersion"] = SCHEMA_VERSION
+    return state
 
 
 def validate_state(state):
     obj(state, "数据")
     require(set(state) == set(empty_state()), "数据结构不完整或含未知字段")
-    require(type(state["schemaVersion"]) is int and state["schemaVersion"] == 1, "不支持此备份版本")
+    require(type(state["schemaVersion"]) is int and state["schemaVersion"] == SCHEMA_VERSION, "不支持此备份版本")
     require(type(state["revision"]) is int and state["revision"] >= 0, "数据版本无效")
     validate_settings(state["settings"])
     maps = {}
@@ -167,6 +186,7 @@ def validate_state(state):
                 date_value(item["startDate"], "开始日期")
                 date_value(item["endDate"], "结束日期")
                 require(item["startDate"] <= item["endDate"], "开始日期不能晚于结束日期")
+                boolean(item["deadline"], "是否有明确截止日期")
                 string_list(item["members"], "项目成员")
                 require(state["settings"]["selfName"] in item["members"], "项目成员必须包含自己")
                 require(item["status"] in ("active", "completed", "archived"), "项目状态无效")
@@ -178,7 +198,7 @@ def validate_state(state):
             if kind in ("task", "milestone", "batch"):
                 date_value(item["date"], "安排日期", optional=kind == "task")
             if kind == "batch":
-                require(type(item["sequence"]) is int and item["sequence"] > 0, "需求批次序号必须为正整数")
+                require(type(item["sequence"]) is int and item["sequence"] > 0, "目标批次序号必须为正整数")
             if kind in ("task", "requirement"):
                 require(item["difficulty"] in ("normal", "medium", "hard"), "工作量无效")
                 require(type(item["subtasks"]) is list and len(item["subtasks"]) <= 20, "最多允许 20 个子任务")
@@ -196,14 +216,14 @@ def validate_state(state):
                 require(bool(item["workers"]), "至少选择一位工作者")
                 string_list(item["dependencies"], "依赖任务", 1000)
                 if "requirementId" in item:
-                    id_value(item["requirementId"], "客户需求")
+                    id_value(item["requirementId"], "关联目标")
                 if "completedAt" in item:
                     timestamp(item["completedAt"], "完成时间")
                     require(item["done"], "未完成任务不能含完成时间")
                 require(not item["done"] or "completedAt" in item, "完成任务缺少完成时间")
             if kind == "requirement":
-                id_value(item["batchId"], "需求批次")
-                require(item["kind"] in ("new", "improve", "retire"), "需求分类无效")
+                id_value(item["batchId"], "目标批次")
+                require(item["kind"] in ("new", "improve", "retire"), "目标分类无效")
     for kind in ("task", "requirement", "batch", "milestone"):
         for item in maps[kind].values():
             project = maps["project"].get(item["projectId"])
@@ -213,15 +233,15 @@ def validate_state(state):
                 # assignments are checked at mutation time, without rewriting history.
                 if "requirementId" in item:
                     requirement = maps["requirement"].get(item["requirementId"])
-                    require(requirement is not None and requirement["projectId"] == item["projectId"], "关联需求必须属于同一项目")
+                    require(requirement is not None and requirement["projectId"] == item["projectId"], "关联目标必须属于同一项目")
                 for dep_id in item["dependencies"]:
                     dep = maps["task"].get(dep_id)
                     require(dep is not None and dep["projectId"] == item["projectId"] and dep_id != item["id"], "依赖任务必须属于同一项目且不能为自己")
             if kind == "requirement":
                 batch = maps["batch"].get(item["batchId"])
-                require(batch is not None and batch["projectId"] == item["projectId"], "需求批次必须属于同一项目")
+                require(batch is not None and batch["projectId"] == item["projectId"], "目标批次必须属于同一项目")
     batch_sequences = [(x["projectId"], x["sequence"]) for x in state["batches"]]
-    require(len(batch_sequences) == len(set(batch_sequences)), "同一项目的需求批次序号不能重复")
+    require(len(batch_sequences) == len(set(batch_sequences)), "同一项目的目标批次序号不能重复")
     # Kahn traversal avoids recursion limits on long imported dependency chains.
     inbound = {key: len(value["dependencies"]) for key, value in maps["task"].items()}
     outgoing = {key: [] for key in inbound}
@@ -258,7 +278,7 @@ def create_item(state, kind, payload):
         orders = [x["order"] for x in state[COLLECTIONS[kind]]]
         item["order"] = min(orders, default=1) - 1 if kind == "project" else max(orders, default=-1) + 1
     if kind == "project":
-        item.update(startDate=today().isoformat(), endDate=(today() + dt.timedelta(days=14)).isoformat(), members=[state["settings"]["selfName"]], color="#e8dc42", status="active")
+        item.update(startDate=today().isoformat(), endDate=(today() + dt.timedelta(days=14)).isoformat(), deadline=True, members=[state["settings"]["selfName"]], color="#e8dc42", status="active")
     elif kind == "task":
         item.update(projectId="", date="", difficulty="normal", done=False, workers=[state["settings"]["selfName"]], subtasks=[], dependencies=[])
     elif kind == "requirement":
@@ -380,46 +400,46 @@ def mutate(state, action_type, payload):
 
 SELF = object()  # Placeholder for the user's display name (settings.selfName).
 
-# Student-oriented fiction: courses, people and exam dates are invented for the demo.
+# Fiction for the demo: courses, people and dates are invented.
+# Two kinds of projects: fixed deadline (work / exam review) and open-ended (learning / R&D).
 DEMO_PROJECTS = [
     {
         "title": "源石工程学导论 · 期末复习",
-        "start": "2026-10-12", "end": "2027-01-08", "color": "#e8dc42", "members": [SELF],
+        "start": "2026-10-12", "end": "2027-01-08", "deadline": True, "color": "#e8dc42", "members": [SELF],
         "description": (
             "# 源石工程学导论 · 期末复习\n\n"
             "**课程：** 源石工程学导论（4 学分，必修）\n"
             "**考试：** 2027-01-08，闭卷，120 分钟\n"
-            "**成绩构成：** 平时 30% + 期末 70%\n"
-            "**目标：** 期末 85 分以上\n\n"
+            "**成绩构成：** 平时 30% + 期末 70%\n\n"
             "## 复习思路\n\n"
             "- 第 1–6 章按教材顺序过一遍，每章配一套课后习题。\n"
             "- 10 月 19 日老师通知：第 7 章「源石能量回路」改为必考计算题，单独加练。\n"
-            "- 第 9 章拓展阅读不再考，已从计划中划掉。\n"
+            "- 第 9 章拓展阅读不再考，不安排复习。\n"
             "- 12 月起限时刷历年卷，最后两周只做错题和查漏补缺。\n\n"
             "## 资料\n\n"
             "- 教材第 1–8 章、课堂 PPT、往年真题 3 套\n"
             "- 错题本按章节整理"
         ),
-        "batches": [
+        "goals": [
             ("2026-10-12", [
-                ("A", "new", "期末考试范围：第 1–9 章", "闭卷；题型为计算、简答和论述。平时成绩含 4 次作业。"),
+                ("A", "期末 85 分以上", "平时 30% + 期末 70%，平时分已拿到 27 分。"),
+                ("A1", "第 1–8 章知识点全部过一遍", "每章笔记一份、课后习题一套，错题进错题本。"),
             ]),
             ("2026-10-19", [
-                ("A7", "improve", "第 7 章改为必考计算题", "老师课上通知：第 7 章源石能量回路计算占 20 分。"),
-                ("A9", "retire", "第 9 章拓展阅读不考", "从复习计划中移除，不再安排对应任务。"),
+                ("A7", "第 7 章计算题拿满 20 分", "老师课上通知：第 7 章源石能量回路改为必考计算题。"),
             ]),
         ],
         "tasks": [
-            ("A01", "第 1–2 章笔记梳理", "2026-10-12", "2026-10-16", "已完成", [], [SELF], "normal", "A",
+            ("A01", "第 1–2 章笔记梳理", "2026-10-12", "2026-10-16", "已完成", [], [SELF], "normal", "A1",
              [("1.1 源石的基本性质", True), ("1.2 能量释放模型", True), ("2.1 材料分类", True)]),
-            ("A02", "第 1–2 章课后习题", "2026-10-19", "2026-10-20", "已完成", ["A01"], [SELF], "normal", "A", []),
-            ("A03", "第 3–4 章笔记与公式推导", "2026-10-19", "2026-10-21", "已完成", ["A01"], [SELF], "medium", "A", []),
-            ("A04", "第 3–4 章习题", "2026-10-22", "2026-10-22", "进行中", ["A03"], [SELF], "medium", "A",
+            ("A02", "第 1–2 章课后习题", "2026-10-19", "2026-10-20", "已完成", ["A01"], [SELF], "normal", "A1", []),
+            ("A03", "第 3–4 章笔记与公式推导", "2026-10-19", "2026-10-21", "已完成", ["A01"], [SELF], "medium", "A1", []),
+            ("A04", "第 3–4 章习题", "2026-10-22", "2026-10-22", "进行中", ["A03"], [SELF], "medium", "A1",
              [("习题 3.2–3.8", True), ("习题 4.1–4.6", False), ("错题誊到错题本", False)]),
-            ("A05", "第 5–6 章笔记与例题", "2026-10-26", "2026-11-06", "未开始", ["A04"], [SELF], "medium", "A", []),
+            ("A05", "第 5–6 章笔记与例题", "2026-10-26", "2026-11-06", "未开始", ["A04"], [SELF], "medium", "A1", []),
             ("A06", "第 7 章能量回路计算专项", "2026-11-09", "2026-11-20", "未开始", ["A05"], [SELF], "hard", "A7",
              [("串联回路", False), ("并联回路", False), ("损耗估算", False)]),
-            ("A07", "第 8 章与全书知识框架", "2026-11-23", "2026-12-04", "未开始", ["A06"], [SELF], "normal", "A", []),
+            ("A07", "第 8 章与全书知识框架", "2026-11-23", "2026-12-04", "未开始", ["A06"], [SELF], "normal", "A1", []),
             ("A08", "历年真题限时训练", "2026-12-07", "2026-12-25", "未开始", ["A07"], [SELF], "hard", "A",
              [("2023 年卷", False), ("2024 年卷", False), ("2025 年卷", False)]),
             ("A09", "错题回顾与查漏补缺", "2026-12-28", "2027-01-06", "未开始", ["A08"], [SELF], "normal", "A", []),
@@ -428,7 +448,7 @@ DEMO_PROJECTS = [
     },
     {
         "title": "集成工业产线仿真 · 课程设计",
-        "start": "2026-09-21", "end": "2026-12-18", "color": "#5dd8cf", "members": [SELF, "阿岚", "小周"],
+        "start": "2026-09-21", "end": "2026-12-18", "deadline": True, "color": "#5dd8cf", "members": [SELF, "阿岚", "小周"],
         "description": (
             "# 集成工业产线仿真 · 课程设计\n\n"
             "**小组：** 3 人（自己、阿岚、小周）\n"
@@ -445,12 +465,12 @@ DEMO_PROJECTS = [
             "- 10 月 20 日助教反馈：开题报告缺少参数敏感性分析，最终报告需要补上。\n"
             "- 每周日晚上组会，进度以任务完成情况为准。"
         ),
-        "batches": [
+        "goals": [
             ("2026-09-21", [
-                ("B", "new", "课程设计任务书", "提交仿真模型、设计报告与答辩材料，12 月 18 日答辩。"),
+                ("B", "按时完成课程设计并通过答辩", "提交仿真模型、设计报告与答辩材料，12 月 18 日答辩。"),
             ]),
             ("2026-10-20", [
-                ("B4", "improve", "报告补充产能瓶颈的敏感性分析", "助教反馈：需要说明关键参数变化对产能的影响。"),
+                ("B4", "报告讲清产能瓶颈的敏感性", "助教反馈：需要说明关键参数变化对产能的影响。"),
             ]),
         ],
         "tasks": [
@@ -467,36 +487,36 @@ DEMO_PROJECTS = [
         "milestones": [("开题报告通过", "2026-09-30", True), ("中期检查", "2026-11-13", False), ("课程设计答辩", "2026-12-18", False)],
     },
     {
-        "title": "英语六级备考",
-        "start": "2026-09-07", "end": "2026-12-12", "color": "#ff1aac", "members": [SELF],
+        "title": "同人游戏原型 · 自学与研发",
+        "start": "2026-09-14", "end": "2026-09-14", "deadline": False, "color": "#ff1aac", "members": [SELF],
         "description": (
-            "# 英语六级备考\n\n"
-            "**考试：** 2026-12-12 笔试（示例日期，以官方公布为准）\n"
-            "**目标：** 总分 550 以上\n"
-            "**每日固定：** 单词 40 分钟，听力 30 分钟\n\n"
-            "## 计划\n\n"
-            "- 9–10 月：核心词汇第一轮，长对话精听。\n"
-            "- 10–11 月：阅读、翻译、写作逐项突破，词汇第二轮。\n"
-            "- 12 月：整套真题模考，考前只看错题和高频词。"
+            "# 同人游戏原型 · 自学与研发\n\n"
+            "**类型：** 学习／研发，没有明确截止日期，按自己的节奏推进。\n"
+            "**方向：** 一个工业基建题材的小型关卡原型，边做边学。\n\n"
+            "## 怎么推进\n\n"
+            "- 每周挑一两个能做完的小任务，做完再排下一批。\n"
+            "- 学到的东西马上用进原型里，不单独攒教程。\n"
+            "- 第一关能玩就先给朋友试，根据反馈再决定下一步。"
         ),
-        "batches": [
-            ("2026-09-07", [
-                ("C", "new", "六级笔试：听力、阅读、翻译、写作", "目标总分 550 以上；听力和阅读是主要提分点。"),
+        "goals": [
+            ("2026-09-14", [
+                ("C", "做出一个能玩的关卡原型", "角色能移动、能放置设备，有一个完整的小关卡。"),
+                ("C1", "学会基础的着色器", "能自己写出描边和扫描线效果。"),
             ]),
         ],
         "tasks": [
-            ("C01", "核心词汇第一轮", "2026-09-07", "2026-10-09", "已完成", [], [SELF], "normal", "C", []),
-            ("C02", "听力精听：长对话 10 篇", "2026-10-12", "2026-10-21", "已完成", [], [SELF], "medium", "C", []),
-            ("C03", "阅读真题 2 套", "2026-10-22", "2026-10-22", "未开始", [], [SELF], "normal", "C",
-             [("2024 年 6 月 第一套", False), ("2024 年 12 月 第一套", False)]),
-            ("C04", "核心词汇第二轮", "2026-10-26", "2026-11-13", "未开始", ["C01"], [SELF], "normal", "C", []),
-            ("C05", "翻译专项 8 篇", "2026-11-02", "2026-11-20", "未开始", [], [SELF], "medium", "C", []),
-            ("C06", "写作模板与限时作文 6 篇", "2026-11-16", "2026-11-27", "未开始", ["C05"], [SELF], "medium", "C", []),
-            ("C07", "整套真题模考 4 次", "2026-11-30", "2026-12-09", "未开始", ["C02", "C03", "C04", "C06"], [SELF], "hard", "C",
-             [("模考一", False), ("模考二", False), ("模考三", False), ("模考四", False)]),
-            ("C08", "考前回顾：错题与高频词", "2026-12-10", "2026-12-11", "未开始", ["C07"], [SELF], "normal", "C", []),
+            ("C01", "搭建开发环境与版本管理", "2026-09-14", "2026-09-18", "已完成", [], [SELF], "normal", "C", []),
+            ("C02", "跟着教程做出角色移动", "2026-10-12", "2026-10-21", "已完成", ["C01"], [SELF], "medium", "C", []),
+            ("C03", "读完《游戏编程模式》前 6 章", "2026-10-22", "2026-10-22", "进行中", [], [SELF], "normal", "C",
+             [("命令模式", True), ("享元模式", True), ("观察者模式", False), ("状态模式", False)]),
+            ("C04", "关卡编辑器原型", "2026-10-26", "2026-11-13", "未开始", ["C02"], [SELF], "hard", "C", []),
+            ("C05", "基础着色器：描边与扫描线", "2026-11-02", "2026-11-20", "未开始", [], [SELF], "medium", "C1", []),
+            ("C06", "第一关灰盒", "2026-11-16", "2026-11-27", "未开始", ["C02", "C04"], [SELF], "medium", "C", []),
+            ("C07", "美术占位与 UI", "2026-11-30", "2026-12-09", "未开始", ["C06"], [SELF], "normal", "C", []),
+            ("C08", "找朋友试玩并收集反馈", "2026-12-10", "2026-12-11", "未开始", ["C05", "C06", "C07"], [SELF], "normal", "C",
+             [("试玩 3 人", False), ("整理反馈", False)]),
         ],
-        "milestones": [("报名截止", "2026-09-25", True), ("六级笔试", "2026-12-12", False)],
+        "milestones": [("角色能跑起来", "2026-10-21", True), ("第一关可试玩", "2026-12-11", False)],
     },
 ]
 
@@ -516,20 +536,17 @@ def load_demo(state):
         project = create_item(state, "project", {
             "title": "示例 · " + definition["title"],
             "description": definition["description"] + note,
-            "startDate": definition["start"], "endDate": definition["end"],
+            "startDate": definition["start"], "endDate": definition["end"], "deadline": definition["deadline"],
             "members": list(dict.fromkeys(names(definition["members"]))),
             "color": definition["color"],
         })
         project["order"] = order
         requirements = {}
-        for date, items in definition["batches"]:
+        for date, items in definition["goals"]:
             batch = create_item(state, "batch", {"projectId": project["id"], "date": date})
-            for key, kind, title, description in items:
+            for key, title, description in items:
                 requirements[key] = create_item(state, "requirement", {
-                    "projectId": project["id"], "batchId": batch["id"], "title": title,
-                    "description": description, "kind": kind,
-                    # Retired scope is settled; the rest stays open until the project ends.
-                    "done": kind == "retire",
+                    "projectId": project["id"], "batchId": batch["id"], "title": title, "description": description,
                 })
         tasks = {}
         for code, title, start, end, status, predecessors, workers, difficulty, requirement, subtasks in definition["tasks"]:
@@ -564,9 +581,16 @@ class Store:
             conn.execute("CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, state_json TEXT NOT NULL)")
             conn.execute("INSERT OR IGNORE INTO app_state VALUES (1,0,?)", (json.dumps(empty_state(), ensure_ascii=False),))
             stored_revision, encoded = conn.execute("SELECT revision,state_json FROM app_state WHERE id=1").fetchone()
-            existing = json.loads(encoded)
+            stored = json.loads(encoded)
+            existing = upgrade_state(stored)
             validate_state(existing)
             require(stored_revision == existing["revision"], "数据库版本不一致，请从备份恢复")
+            upgraded = existing is not stored
+        if upgraded:
+            # Keep a copy of the pre-upgrade data before rewriting it in the new schema.
+            self.save_backup(stored, "before-upgrade")
+            with closing(self.connect()) as conn, conn:
+                conn.execute("UPDATE app_state SET state_json=? WHERE id=1", (json.dumps(existing, ensure_ascii=False, separators=(",", ":")),))
         os.chmod(self.database, 0o600)
 
     def connect(self):
@@ -623,9 +647,10 @@ class Store:
                 state = copy.deepcopy(current)
                 if action_type == "state.import":
                     require(set(payload) == {"state"}, "导入需且仅需 state")
-                    validate_state(payload["state"])
+                    imported = upgrade_state(payload["state"])
+                    validate_state(imported)
                     self.save_backup(current, "before-import")
-                    state = copy.deepcopy(payload["state"])
+                    state = copy.deepcopy(imported)
                 elif action_type == "backup.create":
                     require(not payload, "备份无需额外字段")
                     self.save_backup(current)

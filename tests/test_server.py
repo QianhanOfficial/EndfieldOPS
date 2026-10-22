@@ -170,7 +170,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(restored["revision"], before_restore["revision"] + 1)
         prior = list((self.root / "backups").glob("*before-import*.json"))
         self.assertEqual(json.loads(prior[0].read_text()), before_restore)
-        for alteration in (lambda s: s.update(schemaVersion=2), lambda s: s["projects"][0].update(unknown=True), lambda s: s["settings"].update(fontSize=999)):
+        for alteration in (lambda s: s.update(schemaVersion=3), lambda s: s["projects"][0].update(unknown=True), lambda s: s["settings"].update(fontSize=999)):
             invalid = copy.deepcopy(original)
             alteration(invalid)
             with self.assertRaises(module.ApiError):
@@ -186,20 +186,22 @@ class StoreTests(unittest.TestCase):
                 self.act("state.import", {"state": replacement})
         self.assertEqual(self.store.read(), original)
 
-    def test_demo_uses_fixed_student_snapshot_and_does_not_overwrite(self):
+    def test_demo_uses_fixed_snapshot_and_does_not_overwrite(self):
         with mock.patch.object(module, "today", return_value=module.dt.date(2031, 6, 1)):
             state = self.act("demo.load")
         self.assertEqual([p["title"] for p in state["projects"]], [
             "示例 · 源石工程学导论 · 期末复习",
             "示例 · 集成工业产线仿真 · 课程设计",
-            "示例 · 英语六级备考",
+            "示例 · 同人游戏原型 · 自学与研发",
         ])
-        self.assertEqual([(p["startDate"], p["endDate"]) for p in state["projects"]], [
-            ("2026-10-12", "2027-01-08"), ("2026-09-21", "2026-12-18"), ("2026-09-07", "2026-12-12"),
+        self.assertEqual([p["deadline"] for p in state["projects"]], [True, True, False])
+        self.assertEqual([(p["startDate"], p["endDate"]) for p in state["projects"][:2]], [
+            ("2026-10-12", "2027-01-08"), ("2026-09-21", "2026-12-18"),
         ])
         self.assertEqual(len(state["tasks"]), 25)
         self.assertEqual(len(state["milestones"]), 8)
         self.assertEqual(len(state["batches"]), 5)
+        self.assertEqual(len(state["requirements"]), 7)
         self.assertEqual([p["order"] for p in state["projects"]], [0, 1, 2])
         for project in state["projects"]:
             self.assertIn(state["settings"]["selfName"], project["members"])
@@ -214,12 +216,12 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(all(t["completedAt"] == "2026-10-22T00:00:00+08:00" for t in done))
         self.assertTrue(all("completedAt" not in t for t in state["tasks"] if not t["done"]))
         self.assertEqual(sorted(t["title"] for t in state["tasks"] if t["date"] == "2026-10-22"),
-                         ["A04 · 第 3–4 章习题", "C03 · 阅读真题 2 套"])
+                         ["A04 · 第 3–4 章习题", "C03 · 读完《游戏编程模式》前 6 章"])
         with self.assertRaises(module.ApiError):
             self.act("demo.load")
         self.assertEqual(state, self.store.read())
 
-    def test_demo_covers_requirement_kinds_team_work_and_cross_year_dates(self):
+    def test_demo_covers_goals_team_work_and_cross_year_dates(self):
         self.act("settings.update", {"selfName": "个人管理者", "calendarOverrides": {
             "2026-10-24": {"workday": True, "note": "个人安排"},
         }})
@@ -227,15 +229,15 @@ class StoreTests(unittest.TestCase):
         state = self.act("demo.load")
         self.assertEqual(state["settings"], settings)
         tasks = {t["title"].split(" · ")[0]: t for t in state["tasks"]}
-        requirements = {r["title"]: r for r in state["requirements"]}
-        self.assertEqual(sorted({r["kind"] for r in state["requirements"]}), ["improve", "new", "retire"])
-        self.assertTrue(requirements["第 9 章拓展阅读不考"]["done"])
-        self.assertEqual(tasks["A06"]["requirementId"], requirements["第 7 章改为必考计算题"]["id"])
+        goals = {r["title"]: r for r in state["requirements"]}
+        self.assertEqual({r["kind"] for r in state["requirements"]}, {"new"})
+        self.assertEqual(tasks["A06"]["requirementId"], goals["第 7 章计算题拿满 20 分"]["id"])
+        self.assertEqual(tasks["C05"]["requirementId"], goals["学会基础的着色器"]["id"])
         self.assertEqual(tasks["A01"]["workers"], ["个人管理者"])
         self.assertEqual(tasks["B03"]["workers"], ["个人管理者", "小周"])
         self.assertEqual(tasks["B08"]["workers"], ["个人管理者", "阿岚", "小周"])
         self.assertEqual(tasks["B06"]["dependencies"], [tasks["B04"]["id"], tasks["B05"]["id"]])
-        self.assertEqual(tasks["C07"]["dependencies"], [tasks[k]["id"] for k in ("C02", "C03", "C04", "C06")])
+        self.assertEqual(tasks["C08"]["dependencies"], [tasks[k]["id"] for k in ("C05", "C06", "C07")])
         self.assertEqual(tasks["C05"]["dependencies"], [])
         self.assertEqual([(s["title"], s["done"]) for s in tasks["A04"]["subtasks"]],
                          [("习题 3.2–3.8", True), ("习题 4.1–4.6", False), ("错题誊到错题本", False)])
@@ -244,7 +246,39 @@ class StoreTests(unittest.TestCase):
         self.assertIn("2026-10-22状态：进行中", tasks["B03"]["description"])
         self.assertEqual(tasks["A09"]["date"], "2027-01-06")
         self.assertEqual(state["projects"][0]["endDate"], "2027-01-08")
-        self.assertIn("以官方公布为准", state["projects"][2]["description"])
+
+    def test_open_ended_projects_and_calendar_setting(self):
+        created = self.act("project.create", {"title": "自学", "startDate": "2026-10-01", "endDate": "2026-10-01", "deadline": False})
+        self.assertFalse(created["projects"][0]["deadline"])
+        self.assertTrue(self.project("有截止")["deadline"])
+        with self.assertRaises(module.ApiError):
+            self.act("project.update", {"id": created["projects"][0]["id"], "deadline": "no"})
+        self.assertFalse(self.store.read()["settings"]["calendarShowOpen"])
+        self.assertTrue(self.act("settings.update", {"calendarShowOpen": True})["settings"]["calendarShowOpen"])
+
+    def test_version_1_data_upgrades_with_backup(self):
+        legacy = module.empty_state()
+        legacy["schemaVersion"] = 1
+        legacy["settings"].pop("calendarShowOpen")
+        stamp = "2026-10-01T00:00:00.000Z"
+        legacy["projects"].append({
+            "id": "p1", "createdAt": stamp, "updatedAt": stamp, "title": "旧项目", "description": "", "order": 0,
+            "startDate": "2026-10-01", "endDate": "2026-11-01", "members": ["自己"], "color": "#e8dc42", "status": "active",
+        })
+        database = self.root / "legacy/dayline.sqlite3"
+        database.parent.mkdir()
+        with closing(sqlite3.connect(database)) as conn, conn:
+            conn.execute("CREATE TABLE app_state (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, state_json TEXT NOT NULL)")
+            conn.execute("INSERT INTO app_state VALUES (1,0,?)", (json.dumps(legacy, ensure_ascii=False),))
+        store = module.Store(database, self.root / "legacy-backups")
+        upgraded = store.read()
+        self.assertEqual(upgraded["schemaVersion"], 2)
+        self.assertTrue(upgraded["projects"][0]["deadline"])
+        self.assertFalse(upgraded["settings"]["calendarShowOpen"])
+        self.assertEqual(len(list((self.root / "legacy-backups").glob("eops-*-before-upgrade-r0.json"))), 1)
+        imported = self.act("state.import", {"state": legacy})
+        self.assertEqual(imported["schemaVersion"], 2)
+        self.assertTrue(imported["projects"][0]["deadline"])
 
     def test_demo_cannot_replace_personal_projects(self):
         self.project("我的个人项目")

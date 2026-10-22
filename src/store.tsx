@@ -105,8 +105,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   if (!state)
     return (
       <div className="boot">
-        <img className="endfield-logo" src="/assets/eops-logo-black.svg" alt="EOPS 终末地工业项目中枢" />
-        <h1>EOPS 终末地工业项目中枢</h1>
+        <img className="endfield-logo" src="/assets/eops-logo-black.svg" alt="EOPS 终末地工业行动中枢" />
+        <h1>EOPS 终末地工业行动中枢</h1>
         <p>{error || "正在打开你的工作台…"}</p>
         {error && (
           <button className="btn" onClick={() => refresh()}>

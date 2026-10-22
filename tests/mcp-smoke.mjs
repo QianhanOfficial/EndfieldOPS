@@ -39,7 +39,7 @@ if (!base) {
 const transport = new StdioClientTransport({ command: process.execPath, args: [serverPath], env: { EOPS_URL: base }, stderr: 'pipe' });
 let stderr = '';
 transport.stderr?.on('data', data => { stderr += data.toString(); });
-const client = new Client({ name: 'eops-smoke', version: '0.1.0' });
+const client = new Client({ name: 'eops-smoke', version: '0.2.0' });
 const unpack = response => {
   assert.equal(response.isError, undefined, JSON.stringify(response.content));
   return JSON.parse(response.content.find(item => item.type === 'text').text);

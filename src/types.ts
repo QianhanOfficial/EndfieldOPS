@@ -6,6 +6,8 @@ export interface Project {
   description: string;
   startDate: string;
   endDate: string;
+  /** false: learning / R&D without a fixed deadline; endDate is then not used. */
+  deadline: boolean;
   members: string[];
   color: string;
   status: "active" | "completed" | "archived";
@@ -72,6 +74,7 @@ export interface Settings {
   selfName: string;
   calendarOverrides: Record<string, { workday: boolean; note: string }>;
   reducedMotion: boolean;
+  calendarShowOpen: boolean;
 }
 export interface AppState {
   schemaVersion: number;

@@ -35,7 +35,7 @@ const taskFields = {
   requirementId: z.union([id, z.literal('')]), order,
 };
 const projectFields = {
-  title, description, startDate: isoDate, endDate: isoDate, members: people,
+  title, description, startDate: isoDate, endDate: isoDate, deadline: z.boolean(), members: people,
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/), status: z.enum(['active', 'completed', 'archived']), order,
 };
 const requirementFields = { title, description, kind: z.enum(['new', 'improve', 'retire']), done: z.boolean(), difficulty, subtasks, order };
@@ -96,7 +96,7 @@ function safe(handler) {
   };
 }
 const ordered = records => [...records].sort((a, b) => a.order - b.order);
-const server = new McpServer({ name: 'eops-local', version: '0.1.0' });
+const server = new McpServer({ name: 'eops-local', version: '0.2.0' });
 const readAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
 server.registerTool('eops_get_state', {
@@ -139,14 +139,14 @@ server.registerTool('eops_get_day', {
   const tasks = ordered(state.tasks.filter(task => task.date === date && (!projectId || task.projectId === projectId)));
   const milestones = ordered(state.milestones.filter(item => item.date === date && (!projectId || item.projectId === projectId)));
   const ids = new Set([...tasks, ...milestones].map(item => item.projectId));
-  const projects = ordered(state.projects.filter(project => projectId ? project.id === projectId : ids.has(project.id) || (project.status === 'active' && project.startDate <= date && project.endDate >= date)));
+  const projects = ordered(state.projects.filter(project => projectId ? project.id === projectId : ids.has(project.id) || (project.status === 'active' && project.startDate <= date && (project.deadline === false || project.endDate >= date))));
   const completed = tasks.filter(task => task.done).length;
   return { revision: state.revision, date, projects, tasks, milestones, completion: { completed, total: tasks.length, percent: tasks.length ? Math.round(completed / tasks.length * 100) : 100, noTasks: tasks.length === 0 } };
 }));
 
 server.registerTool('eops_apply_action', {
   title: '调整EOPS安排',
-  description: 'Create/update/reorder local projects, tasks, requirement batches/items, milestones or settings using the SAME validated API as the UI. First read the latest revision; expectedRevision is required. On conflict reread and reconcile with the user intent; never silently overwrite. Dates are YYYY-MM-DD. Empty task date means unscheduled. Tasks are one-day execution items. Requirement kinds are new/improve/retire, with no history-linking fields. Keep task order on completion. Complete/archive a project only on an explicit user instruction. This tool cannot delete data, import a database, or load sample data.',
+  description: 'Create/update/reorder local projects, tasks, goal batches/goals (stored as requirements), milestones or settings using the SAME validated API as the UI. First read the latest revision; expectedRevision is required. On conflict reread and reconcile with the user intent; never silently overwrite. Dates are YYYY-MM-DD. Empty task date means unscheduled. Tasks are one-day execution items. Requirement kinds are new/improve/retire, with no history-linking fields. Keep task order on completion. Complete/archive a project only on an explicit user instruction. This tool cannot delete data, import a database, or load sample data.',
   inputSchema: { expectedRevision: revision, action: actionSchema },
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 }, safe(async ({ expectedRevision, action: change }) => request('/api/action', { ...change, expectedRevision })));

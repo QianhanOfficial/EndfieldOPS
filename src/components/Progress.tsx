@@ -10,6 +10,7 @@ import {
   hasEstimatedWorkdays,
 } from "../lib/calendar";
 import type { Project } from "../types";
+import { MODE_LABEL, isOverdue, projectEnd } from "../lib/project";
 
 export default function Progress({
   project,
@@ -21,6 +22,15 @@ export default function Progress({
   const { state } = useApp();
   const now = today();
   const overrides = state.settings.calendarOverrides;
+  const open = !project.deadline;
+  // Open-ended projects measure progress by tasks; their span ends at the latest item.
+  const spanEnd = projectEnd(project, state, now);
+  const own = state.tasks.filter((t) => t.projectId === project.id);
+  const taskRate = own.length
+    ? Math.round((own.filter((t) => t.done).length / own.length) * 1000) / 10
+    : 0;
+  const elapsed =
+    project.startDate > now ? 0 : workdays(project.startDate, now, overrides);
   const total = workdays(project.startDate, project.endDate, overrides);
   const remaining = remainingWorkdays(
     project.endDate,
@@ -28,18 +38,15 @@ export default function Progress({
     overrides,
     project.startDate,
   );
-  const percent = projectTimeProgress(
-    project.startDate,
-    project.endDate,
-    now,
-    overrides,
-  );
+  const percent = open
+    ? taskRate
+    : projectTimeProgress(project.startDate, project.endDate, now, overrides);
   const milestones = state.milestones
     .filter((item) => item.projectId === project.id)
     .sort((a, b) => a.date.localeCompare(b.date));
   const next = milestones.find((item) => !item.done);
   const nextRemaining = next ? remainingWorkdays(next.date, now, overrides) : 0;
-  const late = project.endDate < now && project.status === "active";
+  const late = isOverdue(project, now);
   const overdue = late
     ? workdays(addDays(project.endDate, 1), now, overrides)
     : 0;
@@ -94,17 +101,23 @@ export default function Progress({
       <div className="progress-main">
         <div className="remaining">
           <span>
-            {late ? "项目已逾期" : "剩余工作天数"}
-            {(late ? estimatedOverdue : estimatedRemaining) ? " · 预计" : ""}
+            {open ? "已进行" : late ? "项目已逾期" : "剩余工作天数"}
+            {!open && (late ? estimatedOverdue : estimatedRemaining)
+              ? " · 预计"
+              : ""}
           </span>
           <div>
-            <strong>{late ? overdue : remaining}</strong>
+            <strong>{open ? elapsed : late ? overdue : remaining}</strong>
             <small>工作日</small>
           </div>
         </div>
         <div className="timeline-area">
           <div className="timeline-meta">
-            <span>时间进度{estimatedProject ? " · 预计" : ""}</span>
+            <span>
+              {open
+                ? "任务完成率"
+                : `时间进度${estimatedProject ? " · 预计" : ""}`}
+            </span>
             <b>
               {Math.round(percent)}
               <small>%</small>
@@ -115,7 +128,7 @@ export default function Progress({
             {milestones.map((milestone) => {
               const point = projectTimeProgress(
                 project.startDate,
-                project.endDate,
+                spanEnd,
                 milestone.date,
                 overrides,
               );
@@ -146,7 +159,9 @@ export default function Progress({
               {formatDate(project.startDate, state.settings.dateFormat)}
             </span>
             <span>
-              {formatDate(project.endDate, state.settings.dateFormat)}{" "}
+              {open
+                ? "无明确 DDL"
+                : formatDate(project.endDate, state.settings.dateFormat)}{" "}
               <Flag size={10} />
             </span>
           </div>
@@ -159,15 +174,19 @@ export default function Progress({
             ? "项目已完成"
             : project.status === "archived"
               ? "项目已归档"
-              : late
-                ? "请检查尚未完成的安排"
-                : "剩余不含今天 · 时间进度计入今天"}
+              : open
+                ? `${MODE_LABEL.open} · 无明确截止日期，按任务完成率显示`
+                : late
+                  ? "请检查尚未完成的安排"
+                  : "剩余不含今天 · 时间进度计入今天"}
         </span>
         <span>
-          {estimatedProject ? "预计共" : "共"} {total} 个工作日
+          {open
+            ? `共 ${own.length} 项任务`
+            : `${estimatedProject ? "预计共" : "共"} ${total} 个工作日`}
         </span>
       </div>
-      {estimatedProject && (
+      {!open && estimatedProject && (
         <p className="calendar-warning">
           排期含尚未收录的节假日日期，按周一至周五预计；手动工作日设置优先。
         </p>

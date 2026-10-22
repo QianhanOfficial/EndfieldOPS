@@ -1,6 +1,6 @@
 {
   "name": "eops",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -28,7 +28,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "tsx": "^4.20.6"
   },
-  "description": "EOPS 终末地工业项目中枢：终末地风格的个人用项目管理系统",
+  "description": "EOPS 终末地工业行动中枢：终末地风格的学习／项目／行动管理系统",
   "license": "PolyForm-Noncommercial-1.0.0",
   "repository": {
     "type": "git",

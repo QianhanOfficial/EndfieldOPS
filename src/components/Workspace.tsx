@@ -62,7 +62,6 @@ const difficultyLabels: Record<Difficulty, string> = {
   medium: "中等",
   hard: "高难",
 };
-const kindLabels = { new: "新增", improve: "改进", retire: "废弃" };
 const weekDays = [
   "星期日",
   "星期一",
@@ -209,9 +208,8 @@ function EditDialog({
     editor.subtasks?.map((s) => ({ ...s })) || [],
   );
   const [dependencies, setDependencies] = useState(editor.dependencies || []);
-  const [kind, setKind] = useState<Requirement["kind"]>(
-    editor.requirementKind || "new",
-  );
+  // Goals no longer show a kind in the UI; keep the stored value for older data.
+  const kind: Requirement["kind"] = editor.requirementKind || "new";
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const submitLock = useRef(false);
@@ -287,9 +285,9 @@ function EditDialog({
   }
   const labels = {
     task: "任务",
-    requirement: "客户需求",
+    requirement: "目标",
     milestone: "里程碑",
-    batch: "需求批次",
+    batch: "目标批次",
   };
   return (
     <Dialog
@@ -302,26 +300,6 @@ function EditDialog({
       <form onSubmit={submit} className="ws-editor-form">
         <div className="ws-dialog-body">
           <fieldset disabled={busy} className="ws-editor-fields">
-            {editor.kind === "requirement" && (
-              <div className="ws-field">
-                <span className="ws-field-label">需求类型</span>
-                <div className="ws-choice-row">
-                  {(Object.keys(kindLabels) as Requirement["kind"][]).map(
-                    (k) => (
-                      <button
-                        type="button"
-                        key={k}
-                        onClick={() => setKind(k)}
-                        className={`ws-choice ws-kind-${k} ${kind === k ? "selected" : ""}`}
-                        aria-pressed={kind === k}
-                      >
-                        {kindLabels[k]}
-                      </button>
-                    ),
-                  )}
-                </div>
-              </div>
-            )}
             {editor.kind !== "batch" && (
               <>
                 <label className="ws-field">
@@ -355,7 +333,7 @@ function EditDialog({
               <label className="ws-field">
                 <span className="ws-field-label">
                   {editor.kind === "batch"
-                    ? "客户提出日期"
+                    ? "设定日期"
                     : editor.kind === "milestone"
                       ? "里程碑日期"
                       : "计划日期"}
@@ -527,7 +505,7 @@ function EditDialog({
               )}
             {editor.kind === "batch" && (
               <p className="ws-help">
-                按沟通次数保留需求。创建后可添加「新增 / 改进 / 废弃」条目。
+                每一批目标记录一次设定或调整的时间，创建后可在其中添加目标。
               </p>
             )}
             {error && (
@@ -725,13 +703,6 @@ function TodoRow({
             <span className="ws-todo-desc">{item.description}</span>
           )}
           <span className="ws-todo-meta">
-            {kind === "requirement" && (
-              <span
-                className={`ws-kind-pill ws-kind-${(item as Requirement).kind}`}
-              >
-                {kindLabels[(item as Requirement).kind]}
-              </span>
-            )}
             {item.difficulty !== "normal" && (
               <span className={`ws-difficulty ${item.difficulty}`}>
                 {difficultyLabels[item.difficulty]}
@@ -1322,7 +1293,7 @@ export default function Workspace({ project, view, date, onDate }: Props) {
   const dayDone = dayTasks.filter((t) => t.done).length;
   const titles = {
     day: "当日任务",
-    requirements: "客户需求",
+    requirements: "目标",
     tasks: "任务管理",
     milestones: "里程碑管理",
     background: "项目背景",
@@ -1572,13 +1543,13 @@ export default function Workspace({ project, view, date, onDate }: Props) {
                       {String(batch.sequence).padStart(2, "0")}
                     </span>
                     <h2>
-                      客户第 {batch.sequence} 次需求
+                      第 {batch.sequence} 批目标
                       <span>{fmt(batch.date)}</span>
                     </h2>
                     <div className="ws-group-tools">
                       <button
                         className="ws-icon-button"
-                        aria-label={`编辑第 ${batch.sequence} 次需求日期`}
+                        aria-label={`编辑第 ${batch.sequence} 批目标日期`}
                         onClick={() =>
                           setEditor({
                             kind: "batch",
@@ -1592,12 +1563,12 @@ export default function Workspace({ project, view, date, onDate }: Props) {
                       </button>
                       <button
                         className="ws-icon-button"
-                        aria-label={`删除第 ${batch.sequence} 次需求批次`}
+                        aria-label={`删除第 ${batch.sequence} 批目标`}
                         onClick={() =>
                           setDeleteTarget({
                             kind: "batch",
                             ids: [batch.id],
-                            label: `第 ${batch.sequence} 次需求及其 ${batchItems.length} 个条目`,
+                            label: `第 ${batch.sequence} 批目标及其 ${batchItems.length} 个目标`,
                           })
                         }
                       >
@@ -1605,7 +1576,7 @@ export default function Workspace({ project, view, date, onDate }: Props) {
                       </button>
                       <button
                         className="ws-icon-button"
-                        aria-label={`为第 ${batch.sequence} 次需求添加条目`}
+                        aria-label={`为第 ${batch.sequence} 批目标添加目标`}
                         onClick={() =>
                           setEditor({ kind: "requirement", batchId: batch.id })
                         }
@@ -1626,8 +1597,8 @@ export default function Workspace({ project, view, date, onDate }: Props) {
                     >
                       <Plus size={14} />
                       {batchItems.length
-                        ? "此筛选下没有条目 · 添加需求"
-                        : "添加这一批客户需求"}
+                        ? "此筛选下没有目标 · 添加目标"
+                        : "在这一批中添加目标"}
                     </button>
                   )}
                 </div>
@@ -1636,18 +1607,18 @@ export default function Workspace({ project, view, date, onDate }: Props) {
           ) : (
             <Empty
               icon={<Layers3 size={28} />}
-              detail="按每次沟通分组，记录新增、改进、废弃条目。"
+              detail="把想达成的结果写成目标，任务可以从目标一键生成。"
               action={
                 <button
                   className="btn ghost"
                   onClick={() => setEditor({ kind: "batch", date })}
                 >
                   <Plus size={15} />
-                  记录第一批需求
+                  设定第一批目标
                 </button>
               }
             >
-              暂无客户需求
+              暂无目标
             </Empty>
           ))}
         {view === "milestones" &&
