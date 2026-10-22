@@ -186,24 +186,23 @@ class StoreTests(unittest.TestCase):
                 self.act("state.import", {"state": replacement})
         self.assertEqual(self.store.read(), original)
 
-    def test_demo_uses_fixed_fiction_snapshot_and_does_not_overwrite(self):
+    def test_demo_uses_fixed_student_snapshot_and_does_not_overwrite(self):
         with mock.patch.object(module, "today", return_value=module.dt.date(2031, 6, 1)):
             state = self.act("demo.load")
         self.assertEqual([p["title"] for p in state["projects"]], [
-            "示例 · 宏山科学院科研治理与智能决策平台建设项目",
-            "示例 · 环塔商会跨区域战略物流服务采购项目",
-            "示例 · 联盟工团四号谷地供能与地质探针建设项目",
+            "示例 · 源石工程学导论 · 期末复习",
+            "示例 · 集成工业产线仿真 · 课程设计",
+            "示例 · 英语六级备考",
         ])
         self.assertEqual([(p["startDate"], p["endDate"]) for p in state["projects"]], [
-            ("2026-09-14", "2026-12-18"), ("2026-10-12", "2027-01-15"), ("2026-08-31", "2027-02-12"),
+            ("2026-10-12", "2027-01-08"), ("2026-09-21", "2026-12-18"), ("2026-09-07", "2026-12-12"),
         ])
         self.assertEqual(len(state["tasks"]), 25)
-        self.assertEqual(len(state["milestones"]), 13)
+        self.assertEqual(len(state["milestones"]), 8)
+        self.assertEqual(len(state["batches"]), 5)
         self.assertEqual([p["order"] for p in state["projects"]], [0, 1, 2])
-        for project, owner in zip(state["projects"], ("安塔尔", "艾维文娜", "秋栗")):
-            self.assertIn(owner, project["members"])
+        for project in state["projects"]:
             self.assertIn(state["settings"]["selfName"], project["members"])
-            self.assertTrue(project["description"].startswith("# EOPS-PJ-2026-"))
             self.assertIn("2026-10-22", project["description"])
             self.assertEqual(project["status"], "active")
         for collection in ("projects", "tasks", "requirements", "milestones"):
@@ -211,14 +210,16 @@ class StoreTests(unittest.TestCase):
                 for notice in ("警告", "AI生成", "OOC", "未核实", "二创测试设定"):
                     self.assertNotIn(notice, item["description"])
         done = [t for t in state["tasks"] if t["done"]]
-        self.assertEqual([t["title"].split(" · ")[0] for t in done], ["A01", "A02", "B01", "C01", "C02", "C03"])
+        self.assertEqual([t["title"].split(" · ")[0] for t in done], ["A01", "A02", "A03", "B01", "B02", "C01", "C02"])
         self.assertTrue(all(t["completedAt"] == "2026-10-22T00:00:00+08:00" for t in done))
         self.assertTrue(all("completedAt" not in t for t in state["tasks"] if not t["done"]))
+        self.assertEqual(sorted(t["title"] for t in state["tasks"] if t["date"] == "2026-10-22"),
+                         ["A04 · 第 3–4 章习题", "C03 · 阅读真题 2 套"])
         with self.assertRaises(module.ApiError):
             self.act("demo.load")
         self.assertEqual(state, self.store.read())
 
-    def test_demo_preserves_responsibility_dependencies_and_cross_year_dates(self):
+    def test_demo_covers_requirement_kinds_team_work_and_cross_year_dates(self):
         self.act("settings.update", {"selfName": "个人管理者", "calendarOverrides": {
             "2026-10-24": {"workday": True, "note": "个人安排"},
         }})
@@ -226,32 +227,24 @@ class StoreTests(unittest.TestCase):
         state = self.act("demo.load")
         self.assertEqual(state["settings"], settings)
         tasks = {t["title"].split(" · ")[0]: t for t in state["tasks"]}
-        self.assertEqual(tasks["A04"]["workers"], ["技术支持组"])
-        self.assertEqual(tasks["B01"]["workers"], ["艾维文娜"])
-        self.assertEqual(tasks["C02"]["workers"], ["工程支持组"])
-        self.assertEqual(tasks["C04"]["workers"], ["秋栗"])
-        self.assertEqual(tasks["A05"]["dependencies"], [tasks["A03"]["id"], tasks["A04"]["id"]])
-        self.assertEqual(tasks["C05"]["dependencies"], [tasks["C04"]["id"]])
-        self.assertEqual(tasks["B03"]["dependencies"], [])
-        self.assertIn("B02初稿", tasks["B03"]["description"])
-        self.assertFalse(tasks["C04"]["done"])
-        self.assertIn("快照状态：阻塞", tasks["C04"]["description"])
-        self.assertIn("尚非合同工期净延期", tasks["C04"]["description"])
-        self.assertEqual(tasks["B07"]["date"], "2027-01-08")
-        self.assertIn("2026-12-14 至 2027-01-08", tasks["B07"]["description"])
-        self.assertEqual(tasks["C08"]["date"], "2027-01-15")
-        self.assertIn("2026-12-21 至 2027-01-15", tasks["C08"]["description"])
-        self.assertEqual(tasks["C10"]["date"], "2027-02-12")
-        p1, p2, p3 = state["projects"]
-        self.assertIn("1,200,000 折金票", p1["description"])
-        self.assertIn("框架合同上限", p2["description"])
-        self.assertIn("3,200,000", p2["description"])
-        self.assertIn("320,000", p2["description"])
-        self.assertIn("2,880,000", p2["description"])
-        self.assertIn("不代表全部金额已支付或已形成采购订单", p2["description"])
-        self.assertIn("已开票并收取预付款：1,600,000", p3["description"])
-        self.assertIn("已确认后续收款计划：6,400,000", p3["description"])
-        self.assertIn("尚未达到第二期付款条件", p3["description"])
+        requirements = {r["title"]: r for r in state["requirements"]}
+        self.assertEqual(sorted({r["kind"] for r in state["requirements"]}), ["improve", "new", "retire"])
+        self.assertTrue(requirements["第 9 章拓展阅读不考"]["done"])
+        self.assertEqual(tasks["A06"]["requirementId"], requirements["第 7 章改为必考计算题"]["id"])
+        self.assertEqual(tasks["A01"]["workers"], ["个人管理者"])
+        self.assertEqual(tasks["B03"]["workers"], ["个人管理者", "小周"])
+        self.assertEqual(tasks["B08"]["workers"], ["个人管理者", "阿岚", "小周"])
+        self.assertEqual(tasks["B06"]["dependencies"], [tasks["B04"]["id"], tasks["B05"]["id"]])
+        self.assertEqual(tasks["C07"]["dependencies"], [tasks[k]["id"] for k in ("C02", "C03", "C04", "C06")])
+        self.assertEqual(tasks["C05"]["dependencies"], [])
+        self.assertEqual([(s["title"], s["done"]) for s in tasks["A04"]["subtasks"]],
+                         [("习题 3.2–3.8", True), ("习题 4.1–4.6", False), ("错题誊到错题本", False)])
+        self.assertEqual(tasks["A06"]["difficulty"], "hard")
+        self.assertIn("2026-10-19 至 2026-10-30", tasks["B03"]["description"])
+        self.assertIn("2026-10-22状态：进行中", tasks["B03"]["description"])
+        self.assertEqual(tasks["A09"]["date"], "2027-01-06")
+        self.assertEqual(state["projects"][0]["endDate"], "2027-01-08")
+        self.assertIn("以官方公布为准", state["projects"][2]["description"])
 
     def test_demo_cannot_replace_personal_projects(self):
         self.project("我的个人项目")
