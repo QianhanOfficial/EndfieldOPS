@@ -20,6 +20,18 @@ EOPS（Endfield OPS；Endfield Operations & Project System）本质是一个项�
 
 无需登录，不需要订阅、云端数据库或外部 AI 服务。服务只监听 `127.0.0.1:11325`。当前尚无多人权限、审批流、合同财务、自动 AI 排期、跨项目风险联动或附件系统；二创示例中的相关内容作为背景文档保存。
 
+## 界面预览
+
+截图使用手动载入的示例项目（快照 2026-10-22），均为虚构数据。
+
+![项目列表（深色）](docs/screenshots/projects-dark.png)
+
+| 确认现状 | 任务管理 |
+| --- | --- |
+| ![确认现状：里程碑、时间进度与完成率](docs/screenshots/status-dark.png) | ![任务管理：任务列表与项目日历](docs/screenshots/tasks-dark.png) |
+| **日历** | **浅色主题** |
+| ![日历：农历、调休与跨项目色带](docs/screenshots/calendar-dark.png) | ![项目列表（浅色）](docs/screenshots/projects-light.png) |
+
 ## 在 macOS 上使用
 
 ### 下载使用包
